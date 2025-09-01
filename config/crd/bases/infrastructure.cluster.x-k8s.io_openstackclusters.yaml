@@ -1553,6 +1553,7 @@ spec:
                           cloudName:
                             description: CloudName specifies the name of the entry
                               in the clouds.yaml file to use.
+                            minLength: 1
                             type: string
                           name:
                             description: |-
@@ -1560,6 +1561,7 @@ spec:
                               or the name of an OpenStackClusterIdentity (type=ClusterIdentity).
                               The Secret must contain a key named `clouds.yaml` which contains an OpenStack clouds.yaml file.
                               The Secret may optionally contain a key named `cacert` containing a PEM-encoded CA certificate.
+                            minLength: 1
                             type: string
                           region:
                             description: |-
@@ -1584,10 +1586,6 @@ spec:
                         - message: region is immutable
                           rule: (!has(self.region) && !has(oldSelf.region)) || self.region
                             == oldSelf.region
-                        - message: name is required
-                          rule: has(self.name)
-                        - message: cloudName is required
-                          rule: has(self.cloudName)
                       image:
                         description: |-
                           The image to use for your server instance.
@@ -2576,6 +2574,7 @@ spec:
                   cloudName:
                     description: CloudName specifies the name of the entry in the
                       clouds.yaml file to use.
+                    minLength: 1
                     type: string
                   name:
                     description: |-
@@ -2583,6 +2582,7 @@ spec:
                       or the name of an OpenStackClusterIdentity (type=ClusterIdentity).
                       The Secret must contain a key named `clouds.yaml` which contains an OpenStack clouds.yaml file.
                       The Secret may optionally contain a key named `cacert` containing a PEM-encoded CA certificate.
+                    minLength: 1
                     type: string
                   region:
                     description: |-
@@ -2607,10 +2607,6 @@ spec:
                 - message: region is immutable
                   rule: (!has(self.region) && !has(oldSelf.region)) || self.region
                     == oldSelf.region
-                - message: name is required
-                  rule: has(self.name)
-                - message: cloudName is required
-                  rule: has(self.cloudName)
               managedSecurityGroups:
                 description: |-
                   ManagedSecurityGroups determines whether OpenStack security groups for the cluster

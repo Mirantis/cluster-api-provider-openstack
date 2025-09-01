@@ -89,7 +89,12 @@ var _ = Describe("OpenStackCluster controller", func() {
 					},
 				},
 			},
-			Spec:   infrav1.OpenStackClusterSpec{},
+			Spec: infrav1.OpenStackClusterSpec{
+				IdentityRef: infrav1.OpenStackIdentityReference{
+					Name:      "test-creds",
+					CloudName: "openstack",
+				},
+			},
 			Status: infrav1.OpenStackClusterStatus{},
 		}
 		capiCluster = &clusterv1.Cluster{
@@ -255,6 +260,32 @@ var _ = Describe("OpenStackCluster controller", func() {
 		Expect(fetched.Spec.IdentityRef.Type).To(Equal("Secret"))
 	})
 
+	It("should fail when namespace is denied access to ClusterIdentity", func() {
+		testCluster.SetName("identity-access-denied")
+		testCluster.Spec.IdentityRef = infrav1.OpenStackIdentityReference{
+			Type:      "ClusterIdentity",
+			Name:      "test-cluster-identity",
+			CloudName: "openstack",
+		}
+
+		err := k8sClient.Create(ctx, testCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, capiCluster)
+		Expect(err).To(BeNil())
+
+		identityAccessErr := &scope.IdentityAccessDeniedError{
+			IdentityName:       "test-cluster-identity",
+			RequesterNamespace: testNamespace,
+		}
+		mockScopeFactory.SetClientScopeCreateError(identityAccessErr)
+
+		req := createRequestFromOSCluster(testCluster)
+		result, err := reconciler.Reconcile(ctx, req)
+
+		Expect(err).To(MatchError(identityAccessErr))
+		Expect(result).To(Equal(reconcile.Result{}))
+	})
+
 	It("should reject updates that modify identityRef.region (immutable)", func() {
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
 			IdentityRef: infrav1.OpenStackIdentityReference{
@@ -325,6 +356,10 @@ var _ = Describe("OpenStackCluster controller", func() {
 	It("should be able to reconcile when bastion is explicitly disabled and does not exist", func() {
 		testCluster.SetName("no-bastion-explicit")
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
 			Bastion: &infrav1.Bastion{Enabled: ptr.To(false)},
 		}
 		err := k8sClient.Create(ctx, testCluster)
@@ -349,7 +384,12 @@ var _ = Describe("OpenStackCluster controller", func() {
 	})
 	It("should delete an existing bastion even if its uuid is not stored in status", func() {
 		testCluster.SetName("delete-existing-bastion")
-		testCluster.Spec = infrav1.OpenStackClusterSpec{}
+		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
+		}
 		err := k8sClient.Create(ctx, testCluster)
 		Expect(err).To(BeNil())
 		err = k8sClient.Create(ctx, capiCluster)
@@ -380,6 +420,10 @@ var _ = Describe("OpenStackCluster controller", func() {
 
 		testCluster.SetName("subnet-filtering")
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
 			Bastion: &infrav1.Bastion{
 				Enabled: ptr.To(true),
 				Spec:    &bastionSpec,
@@ -450,6 +494,10 @@ var _ = Describe("OpenStackCluster controller", func() {
 
 		testCluster.SetName("subnet-filtering")
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
 			Bastion: &infrav1.Bastion{
 				Enabled: ptr.To(true),
 				Spec:    &bastionSpec,
@@ -527,6 +575,10 @@ var _ = Describe("OpenStackCluster controller", func() {
 
 		testCluster.SetName("subnet-filtering")
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
 			DisableAPIServerFloatingIP: ptr.To(true),
 			APIServerFixedIP:           ptr.To("10.0.0.1"),
 			DisableExternalNetwork:     ptr.To(true),
@@ -570,6 +622,10 @@ var _ = Describe("OpenStackCluster controller", func() {
 
 		testCluster.SetName("pre-existing-network-components-by-id")
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
 			Network: &infrav1.NetworkParam{
 				ID: ptr.To(clusterNetworkID),
 			},
@@ -629,6 +685,10 @@ var _ = Describe("OpenStackCluster controller", func() {
 
 		testCluster.SetName("pre-existing-network-components-by-id")
 		testCluster.Spec = infrav1.OpenStackClusterSpec{
+			IdentityRef: infrav1.OpenStackIdentityReference{
+				Name:      "test-creds",
+				CloudName: "openstack",
+			},
 			Network: &infrav1.NetworkParam{
 				Filter: &infrav1.NetworkFilter{
 					Name: clusterNetworkName,

@@ -62,6 +62,7 @@ const (
 	FlavorFlatcar              = "flatcar"
 	FlavorKubernetesUpgrade    = "k8s-upgrade"
 	FlavorFlatcarSysext        = "flatcar-sysext"
+	FlavorClusterIdentity      = "cluster-identity"
 )
 
 // DefaultScheme returns the default scheme to use for testing.
