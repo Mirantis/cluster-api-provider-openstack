@@ -1,0 +1,95 @@
+name: Build and Push Container Images
+
+on:
+  push:
+    tags:
+    - 'v*' # Push events to matching v*
+  workflow_dispatch: # Allow manual trigger
+    inputs:
+      tag:
+        description: 'Tag to build (e.g., v0.13.0-mirantis.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write # Required for ghcr.io
+
+env:
+  # Mirantis registry configuration
+  REGISTRY: ghcr.io/mirantis
+  IMAGE_NAME: cluster-api-provider-openstack
+
+jobs:
+  build-and-push:
+    name: Build and push multi-arch images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set tag environment
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ inputs.tag }}" >> $GITHUB_ENV
+          else
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate go version
+        run: echo "go_version=$(make go-version)" >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.go_version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ env.TAG }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm,linux/arm64,linux/ppc64le,linux/s390x
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GO_VERSION=${{ env.go_version }}
+            ldflags=${{ env.LDFLAGS }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate image digest summary
+        run: |
+          echo "## Container Images Built 🐳" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag | Platform |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} | ${{ env.TAG }} | linux/amd64, linux/arm, linux/arm64, linux/ppc64le, linux/s390x |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull command:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
