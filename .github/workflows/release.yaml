@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write # Allow to create a release.
 
+env:
+  # Mirantis registry configuration for manifest generation
+  PROD_REGISTRY: ghcr.io/mirantis/cluster-api-provider-openstack
+  IMAGE_NAME: capi-openstack-controller
+
 jobs:
   build:
     name: create draft release
@@ -29,6 +34,10 @@ jobs:
       - name: generate release artifacts
         run: |
           make release
+        env:
+          REGISTRY: ${{ env.PROD_REGISTRY }}
+          PROD_REGISTRY: ${{ env.PROD_REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
       - name: generate release notes
         # Ignore failures for release-notes generation so they could still get
         # generated manually before publishing.
