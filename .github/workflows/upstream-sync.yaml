@@ -1,0 +1,95 @@
+# Template for any upstream repository - update the upstream URL as needed
+#
+# Key Features:
+# - Syncs main branch daily with upstream (force sync, never fails)
+# - Protects hotfix/* branches from being overwritten  
+# - Includes error handling and status reporting
+# - Can be triggered manually if needed
+
+name: Mirror Sync with Upstream
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC
+  workflow_dispatch:     # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout mirror repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history needed for mirror operations
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Configure Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Add upstream remote
+      run: |
+        # Add upstream remote (kubernetes-sigs repository)
+        git remote add upstream https://github.com/kubernetes-sigs/cluster-api-provider-openstack.git
+        
+        # Fetch upstream with error handling
+        if ! git fetch upstream; then
+          echo "::error::Failed to fetch from upstream repository"
+          exit 1
+        fi
+        
+        echo "Successfully fetched from upstream"
+
+    - name: Force sync main branch with upstream
+      run: |
+        # Switch to main branch
+        if ! git checkout main; then
+          echo "::error::Failed to checkout main branch"
+          exit 1
+        fi
+        
+        # Check if main is behind upstream
+        BEHIND_COUNT=$(git rev-list --count main..upstream/main)
+        echo "Main branch is $BEHIND_COUNT commits behind upstream"
+        
+        # Reset main to exactly match upstream/main
+        if ! git reset --hard upstream/main; then
+          echo "::error::Failed to reset main branch to upstream/main"
+          exit 1
+        fi
+        
+        # Force push to mirror
+        if ! git push origin main --force; then
+          echo "::error::Failed to push main branch to mirror"
+          exit 1
+        fi
+        
+        echo "Successfully synced main branch with upstream"
+
+    - name: Clean up stale upstream tracking branches
+      run: |
+        # Clean up remote-tracking branches for upstream
+        # This does NOT delete actual branches, just stale remote refs
+        git remote prune upstream
+        echo "Cleaned up stale upstream tracking branches"
+        echo "Note: Only main branch is synced - hotfix/* branches are preserved"
+
+    - name: Report sync status
+      run: |
+        echo "Mirror sync completed successfully"
+        echo "Main branch now matches upstream/main exactly"
+        echo ""
+        echo "Latest commits on main:"
+        git log --oneline -5
+        echo ""
+        echo "Hotfix branches (preserved):"
+        git branch | grep 'hotfix/' || echo "  No hotfix branches found"
+        echo ""
+        echo "Mirror repository is ready for development"
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "::error::🚨 Mirror sync failed! Manual intervention required."
+        echo "::error::Repository: mirantis/cluster-api-provider-openstack" 
+        echo "::error::Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
