@@ -64,10 +64,16 @@ jobs:
         if: steps.diff.outputs.in_sync == 'false'
         run: |
           # Create or switch to the evergreen sync branch
-          if git rev-parse --verify origin/${SYNC_BRANCH} >/dev/null 2>&1; then
-            git switch -c ${SYNC_BRANCH} --track origin/${SYNC_BRANCH} || git switch ${SYNC_BRANCH}
+          if git show-ref --verify --quiet refs/remotes/origin/${SYNC_BRANCH}; then
+            # Sync branch exists on remote - check if we have it locally
+            if git show-ref --verify --quiet refs/heads/${SYNC_BRANCH}; then
+              git switch ${SYNC_BRANCH}
+            else
+              git switch -c ${SYNC_BRANCH} --track origin/${SYNC_BRANCH}
+            fi
           else
-            git switch -c ${SYNC_BRANCH} origin/${BASE_BRANCH} || git switch -c ${SYNC_BRANCH}
+            # Sync branch doesn't exist - create from main
+            git switch -c ${SYNC_BRANCH} origin/${BASE_BRANCH}
           fi
 
           # Force reset sync branch to upstream/main
@@ -75,8 +81,34 @@ jobs:
           # Push the updated sync branch
           git push -f origin ${SYNC_BRANCH}
 
-      - name: Create or update PR to main
+      - name: Check if sync branch differs from main
         if: steps.diff.outputs.in_sync == 'false'
+        id: branch_diff
+        run: |
+          # Fetch latest state to ensure we have current refs
+          git fetch origin ${BASE_BRANCH} ${SYNC_BRANCH} --quiet
+          
+          # Check if branches are actually different (tree-wise)
+          MAIN_TREE=$(git rev-parse origin/${BASE_BRANCH}^{tree})
+          SYNC_TREE=$(git rev-parse origin/${SYNC_BRANCH}^{tree})
+          
+          echo "main tree: $MAIN_TREE"
+          echo "sync tree: $SYNC_TREE"
+          
+          if [ "$MAIN_TREE" = "$SYNC_TREE" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "Branches have identical content (same tree), no PR needed"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Branches have different content, PR is needed"
+            
+            # Show what's different (for debugging)
+            echo "Files changed between branches:"
+            git diff --name-only origin/${BASE_BRANCH} origin/${SYNC_BRANCH} | head -10
+          fi
+
+      - name: Create or update PR to main
+        if: steps.diff.outputs.in_sync == 'false' && steps.branch_diff.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -128,8 +160,11 @@ jobs:
           echo "=== Mirror Sync Report ==="
           if [ "${{ steps.diff.outputs.in_sync }}" = "true" ]; then
             echo "Already in sync with upstream/main. No PR updates needed."
+          elif [ "${{ steps.branch_diff.outputs.has_changes || 'false' }}" = "false" ]; then
+            echo "Branches were out of sync but have identical content. Sync branch updated."
           else
             echo "Opened/updated PR from ${SYNC_BRANCH} -> ${BASE_BRANCH}."
+            echo "Content changes detected between branches"
           fi
           echo ""
           echo "Latest commits on upstream/main:"
