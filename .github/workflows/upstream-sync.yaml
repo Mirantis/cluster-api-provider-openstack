@@ -17,6 +17,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -49,12 +53,18 @@ jobs:
       - name: Determine if main is already in sync
         id: diff
         run: |
+          set -euo pipefail
           git fetch origin ${BASE_BRANCH} --quiet
           UP_SHA=$(git rev-parse upstream/${BASE_BRANCH})
           OR_SHA=$(git rev-parse origin/${BASE_BRANCH} || true)
           echo "upstream/main: $UP_SHA"
           echo "origin/main  : $OR_SHA"
-          if [ "$UP_SHA" = "$OR_SHA" ]; then
+          # Content-based sync check (robust to squash/rebase): compare trees
+          UP_TREE=$(git rev-parse upstream/${BASE_BRANCH}^{tree})
+          OR_TREE=$(git rev-parse origin/${BASE_BRANCH}^{tree} || true)
+          echo "upstream tree: $UP_TREE"
+          echo "origin   tree: $OR_TREE"
+          if [ "$UP_TREE" = "$OR_TREE" ]; then
             echo "in_sync=true"  >> $GITHUB_OUTPUT
           else
             echo "in_sync=false" >> $GITHUB_OUTPUT
@@ -63,6 +73,8 @@ jobs:
       - name: Update sync branch to upstream/main
         if: steps.diff.outputs.in_sync == 'false'
         run: |
+          set -euo pipefail
+          git fetch origin --quiet || true
           # Create or switch to the evergreen sync branch
           if git show-ref --verify --quiet refs/remotes/origin/${SYNC_BRANCH}; then
             # Sync branch exists on remote - check if we have it locally
@@ -87,30 +99,26 @@ jobs:
         run: |
           # Fetch latest state to ensure we have current refs
           git fetch origin ${BASE_BRANCH} ${SYNC_BRANCH} --quiet
-          
-          # Check if branches are actually different (tree-wise)
-          MAIN_TREE=$(git rev-parse origin/${BASE_BRANCH}^{tree})
-          SYNC_TREE=$(git rev-parse origin/${SYNC_BRANCH}^{tree})
-          
-          echo "main tree: $MAIN_TREE"
-          echo "sync tree: $SYNC_TREE"
-          
-          if [ "$MAIN_TREE" = "$SYNC_TREE" ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "Branches have identical content (same tree), no PR needed"
-          else
+
+          # After resetting sync to upstream, decide if PR is needed based on patch-unique commits
+          UPSTREAM_PATCH_AHEAD=$(git rev-list --left-only --cherry-pick --count upstream/${BASE_BRANCH}...origin/${BASE_BRANCH} || echo 0)
+          echo "upstream patch-ahead of main by: $UPSTREAM_PATCH_AHEAD commits"
+
+          if [ "$UPSTREAM_PATCH_AHEAD" -gt 0 ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "Branches have different content, PR is needed"
-            
-            # Show what's different (for debugging)
-            echo "Files changed between branches:"
-            git diff --name-only origin/${BASE_BRANCH} origin/${SYNC_BRANCH} | head -10
+            echo "PR is needed; upstream has patch-unique commits not in main"
+            echo "Representative missing upstream commits:"
+            git log --left-right --cherry-pick --oneline upstream/${BASE_BRANCH}...origin/${BASE_BRANCH} | sed -n 's/^</missing /p' | head -10 || true
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "All upstream changes already present in main (possibly via squash/rebase); no PR needed"
           fi
 
       - name: Create or update PR to main
         if: steps.diff.outputs.in_sync == 'false' && steps.branch_diff.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const {owner, repo} = context.repo;
             const headRef = `${owner}:${process.env.SYNC_BRANCH}`;
@@ -171,7 +179,7 @@ jobs:
           git log upstream/${BASE_BRANCH} --oneline -5 || true
           echo ""
           echo "Hotfix branches (preserved, untouched by this workflow):"
-          git for-each-ref --format='%(refname:short)' refs/heads/hotfix/ || echo "  No hotfix/* branches found"
+          git ls-remote --heads origin 'hotfix/*' | awk '{print $2}' || echo "  No hotfix/* branches found"
           echo "=========================="
 
       - name: Notify on failure
