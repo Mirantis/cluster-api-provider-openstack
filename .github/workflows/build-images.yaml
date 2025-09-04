@@ -17,8 +17,8 @@ permissions:
 
 env:
   # Mirantis registry configuration
-  REGISTRY: ghcr.io/mirantis/cluster-api-provider-openstack
-  IMAGE_NAME: capi-openstack-controller
+  REGISTRY: ghcr.io/mirantis
+  IMAGE_NAME: cluster-api-provider-openstack
 
 jobs:
   build-and-push:

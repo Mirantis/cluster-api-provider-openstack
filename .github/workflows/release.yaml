@@ -11,8 +11,8 @@ permissions:
 
 env:
   # Mirantis registry configuration for manifest generation
-  PROD_REGISTRY: ghcr.io/mirantis/cluster-api-provider-openstack
-  IMAGE_NAME: capi-openstack-controller
+  PROD_REGISTRY: ghcr.io/mirantis
+  IMAGE_NAME: cluster-api-provider-openstack
 
 jobs:
   build:
