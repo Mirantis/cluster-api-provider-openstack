@@ -90,6 +90,11 @@ jobs:
 
           # Force reset sync branch to upstream/main
           git reset --hard upstream/${BASE_BRANCH}
+          
+          # Restore our own workflow files (don't sync upstream workflows)
+          git checkout origin/${BASE_BRANCH} -- .github/workflows/ || true
+          git commit -m "Preserve Mirantis workflow files" --allow-empty || true
+          
           # Push the updated sync branch
           git push -f origin ${SYNC_BRANCH}
 
