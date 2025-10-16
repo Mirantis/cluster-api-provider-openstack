@@ -27,7 +27,7 @@ unexport GOPATH
 TRACE ?= 0
 
 # Go
-GO_VERSION ?= 1.24.4
+GO_VERSION ?= 1.24.9
 
 # Directories.
 ARTIFACTS ?= $(REPO_ROOT)/_artifacts
@@ -68,6 +68,11 @@ GOLANGCI_LINT := $(TOOLS_BIN_DIR)/golangci-lint
 GOTESTSUM := $(TOOLS_BIN_DIR)/gotestsum
 KUSTOMIZE := $(TOOLS_BIN_DIR)/kustomize
 MOCKGEN := $(TOOLS_BIN_DIR)/mockgen
+OPENAPI_GEN := $(TOOLS_BIN_DIR)/openapi-gen
+APPLYCONFIGURATION_GEN := $(TOOLS_BIN_DIR)/applyconfiguration-gen
+CLIENT_GEN := $(TOOLS_BIN_DIR)/client-gen
+LISTER_GEN := $(TOOLS_BIN_DIR)/lister-gen
+INFORMER_GEN := $(TOOLS_BIN_DIR)/informer-gen
 RELEASE_NOTES := $(TOOLS_BIN_DIR)/release-notes
 SETUP_ENVTEST := $(TOOLS_BIN_DIR)/setup-envtest
 GEN_CRD_API_REFERENCE_DOCS := $(TOOLS_BIN_DIR)/gen-crd-api-reference-docs
@@ -184,10 +189,12 @@ e2e-templates: $(addprefix $(E2E_NO_ARTIFACT_TEMPLATES_DIR)/, \
 		 cluster-template-without-lb.yaml \
 		 cluster-template.yaml \
 		 cluster-template-flatcar.yaml \
-                 cluster-template-k8s-upgrade.yaml \
+		 cluster-template-k8s-upgrade.yaml \
 		 cluster-template-flatcar-sysext.yaml \
 		 cluster-template-no-bastion.yaml \
-		 cluster-template-health-monitor.yaml)
+		 cluster-template-health-monitor.yaml \
+		 cluster-template-capi-v1beta1.yaml \
+		 cluster-template-cluster-identity.yaml)
 # Currently no templates that require CI artifacts
 # $(addprefix $(E2E_TEMPLATES_DIR)/, add-templates-here.yaml) \
 
@@ -304,8 +311,64 @@ generate-controller-gen: $(CONTROLLER_GEN)
 		object:headerFile=./hack/boilerplate/boilerplate.generatego.txt
 
 .PHONY: generate-codegen
-generate-codegen: generate-controller-gen
-	./hack/update-codegen.sh
+generate-codegen: generate-controller-gen $(OPENAPI_GEN) $(APPLYCONFIGURATION_GEN) $(CLIENT_GEN) $(LISTER_GEN) $(INFORMER_GEN)
+	@echo "** Generating OpenAPI definitions **"
+	# The package list includes:
+	# - CAPO's own API packages (v1alpha1, v1beta1) that have // +k8s:openapi-gen= markers
+	# - Dependency packages from CAPI and k8s.io that are referenced by CAPO's APIs
+	# - Base k8s.io/apimachinery packages
+	$(OPENAPI_GEN) \
+		--go-header-file=./hack/boilerplate.go.txt \
+		--output-file=zz_generated.openapi.go \
+		--output-dir=./cmd/models-schema \
+		--output-pkg=main \
+		--report-filename=./api_violations.report \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1alpha1 \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1 \
+		sigs.k8s.io/cluster-api/api/core/v1beta2 \
+		sigs.k8s.io/cluster-api/api/ipam/v1beta2 \
+		sigs.k8s.io/cluster-api/api/core/v1beta1 \
+		sigs.k8s.io/cluster-api/api/ipam/v1beta1 \
+		k8s.io/api/core/v1 \
+		k8s.io/apimachinery/pkg/apis/meta/v1 \
+		k8s.io/apimachinery/pkg/runtime \
+		k8s.io/apimachinery/pkg/version
+	@echo "** Generating openapi.json **"
+	go run ./cmd/models-schema | jq > ./openapi.json
+	@echo "** Generating applyconfiguration code **"
+	$(APPLYCONFIGURATION_GEN) \
+		--go-header-file=./hack/boilerplate.go.txt \
+		--output-dir=./pkg/generated/applyconfiguration \
+		--output-pkg=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/applyconfiguration \
+		--openapi-schema=./openapi.json \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1alpha1 \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1
+	@echo "** Generating clientset code **"
+	$(CLIENT_GEN) \
+		--go-header-file=./hack/boilerplate.go.txt \
+		--output-dir=./pkg/generated/clientset \
+		--output-pkg=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/clientset \
+		--clientset-name=clientset \
+		--input-base=sigs.k8s.io/cluster-api-provider-openstack \
+		--apply-configuration-package=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/applyconfiguration \
+		--input=api/v1alpha1 \
+		--input=api/v1beta1
+	@echo "** Generating lister code **"
+	$(LISTER_GEN) \
+		--go-header-file=./hack/boilerplate.go.txt \
+		--output-dir=./pkg/generated/listers \
+		--output-pkg=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/listers \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1alpha1 \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1
+	@echo "** Generating informer code **"
+	$(INFORMER_GEN) \
+		--go-header-file=./hack/boilerplate.go.txt \
+		--output-dir=./pkg/generated/informers \
+		--output-pkg=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/informers \
+		--versioned-clientset-package=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/clientset/clientset \
+		--listers-package=sigs.k8s.io/cluster-api-provider-openstack/pkg/generated/listers \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1alpha1 \
+		sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1
 
 .PHONY: generate-manifests
 generate-manifests: $(CONTROLLER_GEN) ## Generate manifests e.g. CRD, RBAC etc.
@@ -339,7 +402,16 @@ generate-api-docs-%: $(GEN_CRD_API_REFERENCE_DOCS) FORCE
 
 .PHONY: docker-build
 docker-build: ## Build the docker image for controller-manager
-	docker build -f Dockerfile --build-arg GO_VERSION=$(GO_VERSION) --build-arg goproxy=$(GOPROXY) --build-arg ARCH=$(ARCH) --build-arg ldflags="$(LDFLAGS)" . -t $(CONTROLLER_IMG_TAG)
+	docker build -f Dockerfile --build-arg GO_VERSION=$(GO_VERSION) \
+	--build-arg goproxy=$(GOPROXY) \
+	--build-arg ARCH=$(ARCH) . -t $(CONTROLLER_IMG_TAG)
+
+.PHONY: docker-build-debug
+docker-build-debug: ## Build the docker image for controller-manager with debug info
+	docker build -f Dockerfile --build-arg GO_VERSION=$(GO_VERSION) \
+	--build-arg goproxy=$(GOPROXY) \
+	--build-arg ARCH=$(ARCH) \
+	--build-arg ldflags="-extldflags=-static" . -t $(CONTROLLER_IMG_TAG)
 
 .PHONY: docker-push
 docker-push: ## Push the docker image
@@ -477,14 +549,17 @@ generate-release-notes: $(RELEASE_NOTES_DIR) $(RELEASE_NOTES)
 	if [ -n "${PRE_RELEASE}" ]; then \
 	echo -e ":rotating_light: This is a RELEASE CANDIDATE. Use it only for testing purposes. If you find any bugs, file an [issue](https://github.com/kubernetes-sigs/cluster-api-provider-openstack/issues/new/choose).\n" >> $(RELEASE_NOTES_DIR)/$(RELEASE_TAG).md; \
 	fi
-	"$(RELEASE_NOTES)" --from=$(PREVIOUS_TAG) >> $(RELEASE_NOTES_DIR)/$(RELEASE_TAG).md
+	"$(RELEASE_NOTES)" --repository=kubernetes-sigs/cluster-api-provider-openstack \
+	  --prefix-area-label=false --add-kubernetes-version-support=false \
+	  --from=$(PREVIOUS_TAG) --release=$(RELEASE_TAG) >> $(RELEASE_NOTES_DIR)/$(RELEASE_TAG).md
 
 .PHONY: templates
 templates: ## Generate cluster templates
 templates: templates/cluster-template.yaml \
 	templates/cluster-template-without-lb.yaml \
 	templates/cluster-template-flatcar.yaml \
-	templates/cluster-template-flatcar-sysext.yaml
+	templates/cluster-template-flatcar-sysext.yaml \
+	templates/cluster-template-capi-v1beta1.yaml
 
 templates/cluster-template.yaml: kustomize/v1beta1/default $(KUSTOMIZE) FORCE
 	$(KUSTOMIZE) build "$<" > "$@"
