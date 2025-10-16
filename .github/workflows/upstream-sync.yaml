@@ -55,16 +55,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin ${BASE_BRANCH} --quiet
-          UP_SHA=$(git rev-parse upstream/${BASE_BRANCH})
-          OR_SHA=$(git rev-parse origin/${BASE_BRANCH} || true)
-          echo "upstream/main: $UP_SHA"
-          echo "origin/main  : $OR_SHA"
-          # Content-based sync check (robust to squash/rebase): compare trees
-          UP_TREE=$(git rev-parse upstream/${BASE_BRANCH}^{tree})
-          OR_TREE=$(git rev-parse origin/${BASE_BRANCH}^{tree} || true)
-          echo "upstream tree: $UP_TREE"
-          echo "origin   tree: $OR_TREE"
-          if [ "$UP_TREE" = "$OR_TREE" ]; then
+          echo "Checking differences excluding .github/workflows/**"
+          if git diff --quiet upstream/${BASE_BRANCH} origin/${BASE_BRANCH} -- . ':(exclude).github/workflows/**'; then
             echo "in_sync=true"  >> $GITHUB_OUTPUT
           else
             echo "in_sync=false" >> $GITHUB_OUTPUT
@@ -88,13 +80,22 @@ jobs:
             git switch -c ${SYNC_BRANCH} origin/${BASE_BRANCH}
           fi
 
-          # Force reset sync branch to upstream/main
-          git reset --hard upstream/${BASE_BRANCH}
-          
-          # Restore our own workflow files (don't sync upstream workflows)
-          git checkout origin/${BASE_BRANCH} -- .github/workflows/ || true
-          git commit -m "Preserve Mirantis workflow files" --allow-empty || true
-          
+          # Rebase local state of sync branch onto our main to start clean
+          git reset --hard origin/${BASE_BRANCH}
+
+          # Compute and apply upstream changes excluding workflow files
+          if git diff --quiet origin/${BASE_BRANCH} upstream/${BASE_BRANCH} -- . ':(exclude).github/workflows/**'; then
+            echo "No non-workflow changes from upstream; nothing to apply."
+          else
+            git diff --binary origin/${BASE_BRANCH} upstream/${BASE_BRANCH} -- . ':(exclude).github/workflows/**' > /tmp/upstream-no-workflows.patch
+            git apply -3 /tmp/upstream-no-workflows.patch || {
+              echo "::error::Failed to apply upstream patch excluding workflows";
+              exit 1;
+            }
+            git add -A
+            git commit -m "Sync with upstream/${BASE_BRANCH} (excluding .github/workflows)" || true
+          fi
+
           # Push the updated sync branch
           git push -f origin ${SYNC_BRANCH}
 
@@ -105,18 +106,15 @@ jobs:
           # Fetch latest state to ensure we have current refs
           git fetch origin ${BASE_BRANCH} ${SYNC_BRANCH} --quiet
 
-          # After resetting sync to upstream, decide if PR is needed based on patch-unique commits
-          UPSTREAM_PATCH_AHEAD=$(git rev-list --left-only --cherry-pick --count upstream/${BASE_BRANCH}...origin/${BASE_BRANCH} || echo 0)
-          echo "upstream patch-ahead of main by: $UPSTREAM_PATCH_AHEAD commits"
-
-          if [ "$UPSTREAM_PATCH_AHEAD" -gt 0 ]; then
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "PR is needed; upstream has patch-unique commits not in main"
-            echo "Representative missing upstream commits:"
-            git log --left-right --cherry-pick --oneline upstream/${BASE_BRANCH}...origin/${BASE_BRANCH} | sed -n 's/^</missing /p' | head -10 || true
-          else
+          # Decide if PR is needed based on content differences excluding workflow files
+          if git diff --quiet origin/${BASE_BRANCH} origin/${SYNC_BRANCH} -- . ':(exclude).github/workflows/**'; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "All upstream changes already present in main (possibly via squash/rebase); no PR needed"
+            echo "All upstream changes already present in main (excluding workflows); no PR needed"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "PR is needed; content changes detected outside .github/workflows/**"
+            echo "Changed files (excluding workflows):"
+            git diff --name-only origin/${BASE_BRANCH} origin/${SYNC_BRANCH} -- . ':(exclude).github/workflows/**' | head -50 || true
           fi
 
       - name: Create or update PR to main
@@ -172,12 +170,12 @@ jobs:
           echo ""
           echo "=== Mirror Sync Report ==="
           if [ "${{ steps.diff.outputs.in_sync }}" = "true" ]; then
-            echo "Already in sync with upstream/main. No PR updates needed."
+            echo "Already in sync with upstream/main (excluding .github/workflows). No PR updates needed."
           elif [ "${{ steps.branch_diff.outputs.has_changes || 'false' }}" = "false" ]; then
-            echo "Branches were out of sync but have identical content. Sync branch updated."
+            echo "Branches were out of sync but have identical content outside workflows. Sync branch updated."
           else
             echo "Opened/updated PR from ${SYNC_BRANCH} -> ${BASE_BRANCH}."
-            echo "Content changes detected between branches"
+            echo "Content changes detected between branches (excluding .github/workflows)"
           fi
           echo ""
           echo "Latest commits on upstream/main:"
