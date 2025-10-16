@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout mirror repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -119,7 +119,7 @@ jobs:
 
       - name: Create or update PR to main
         if: steps.diff.outputs.in_sync == 'false' && steps.branch_diff.outputs.has_changes == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
