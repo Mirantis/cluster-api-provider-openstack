@@ -6,7 +6,7 @@ require (
 	github.com/a8m/envsubst v1.4.3
 	github.com/ahmetb/gen-crd-api-reference-docs v0.3.1-0.20220420215017-3f29e6853552
 	github.com/itchyny/gojq v0.12.17
-	github.com/onsi/ginkgo/v2 v2.26.0
+	github.com/onsi/ginkgo/v2 v2.27.2
 	go.uber.org/mock v0.6.0
 	k8s.io/code-generator v0.33.5
 	sigs.k8s.io/cluster-api-provider-openstack v0.0.0
@@ -72,7 +72,7 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/k-orc/openstack-resource-controller/v2 v2.2.0 // indirect
+	github.com/k-orc/openstack-resource-controller/v2 v2.3.0 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
@@ -114,7 +114,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.36.0 // indirect
 	go.opentelemetry.io/otel/trace v1.36.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.4.0 // indirect
-	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
@@ -130,7 +129,6 @@ require (
 	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.37.0 // indirect
-	golang.org/x/tools/go/expect v0.1.0-deprecated // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250721164621-a45f3dfb1074 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250728155136-f173205681a0 // indirect
@@ -156,7 +154,7 @@ require (
 	k8s.io/release v0.16.9 // indirect
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
-	sigs.k8s.io/cluster-api v1.11.2 // indirect
+	sigs.k8s.io/cluster-api v1.11.3 // indirect
 	sigs.k8s.io/controller-runtime v0.21.0 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
 	sigs.k8s.io/kubebuilder/docs/book/utils v0.0.0-20211028165026-57688c578b5d // indirect
