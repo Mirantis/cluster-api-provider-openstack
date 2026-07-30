@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2021 The Kubernetes Authors.
@@ -17,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package shared
+package e2eshared
 
 import (
 	"bytes"
@@ -56,7 +55,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/yaml"
 
-	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta2"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/clients"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/cloud/services/compute"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/scope"
@@ -711,7 +710,7 @@ type AuthOpts struct {
 	AuthURL    string `ini:"auth-url"`
 	UserID     string `ini:"user-id"`
 	Username   string `ini:"username"`
-	Password   string `ini:"password"`
+	Password   string `ini:"password"` //nolint:gosec // G117: False positive, this is an INI schema field, not a hardcoded secret.
 	TenantID   string `ini:"tenant-id"`
 	TenantName string `ini:"tenant-name"`
 	DomainID   string `ini:"domain-id"`

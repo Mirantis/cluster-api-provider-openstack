@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2021 The Kubernetes Authors.
@@ -17,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package shared
+package e2eshared
 
 import (
 	"context"
@@ -39,7 +38,7 @@ import (
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta2"
 )
 
 func SetupSpecNamespace(ctx context.Context, specName string, e2eCtx *E2EContext) *corev1.Namespace {
@@ -169,7 +168,8 @@ func getOpenStackClusterFromMachine(ctx context.Context, client client.Client, m
 	}
 
 	key = types.NamespacedName{
-		Name: cluster.Spec.InfrastructureRef.Name,
+		Name:      cluster.Spec.InfrastructureRef.Name,
+		Namespace: cluster.Namespace,
 	}
 	openStackCluster := &infrav1.OpenStackCluster{}
 	err = client.Get(ctx, key, openStackCluster)

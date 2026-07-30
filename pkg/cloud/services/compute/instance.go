@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
+	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/flavors"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
+	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/ports"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,7 +37,7 @@ import (
 
 	orcv1alpha1 "github.com/k-orc/openstack-resource-controller/v2/api/v1alpha1"
 
-	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta2"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/clients"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/record"
 	capoerrors "sigs.k8s.io/cluster-api-provider-openstack/pkg/utils/errors"
@@ -65,8 +67,7 @@ func (s *Service) createInstanceImpl(eventObject runtime.Object, instanceSpec *I
 		})
 	}
 
-	instanceCreateTimeout := getTimeout("CLUSTER_API_OPENSTACK_INSTANCE_CREATE_TIMEOUT", timeoutInstanceCreate)
-	instanceCreateTimeout *= time.Minute
+	instanceCreateTimeout := getTimeout("CLUSTER_API_OPENSTACK_INSTANCE_CREATE_TIMEOUT", timeoutInstanceCreate, time.Minute)
 
 	// Don't set ImageRef on the server if we're booting from volume
 	var serverImageRef string
@@ -230,7 +231,7 @@ func (s *Service) getOrCreateVolumeBuilder(eventObject runtime.Object, instanceS
 	createOpts := volumes.CreateOpts{
 		Name:             volumeName(instanceSpec.Name, blockDeviceSpec.Name),
 		Description:      description,
-		Size:             blockDeviceSpec.SizeGiB,
+		Size:             int(blockDeviceSpec.SizeGiB),
 		ImageID:          imageID,
 		AvailabilityZone: availabilityZone,
 		VolumeType:       volType,
@@ -323,7 +324,7 @@ func (s *Service) getBlockDevices(eventObject runtime.Object, instanceSpec *Inst
 		case infrav1.LocalBlockDevice:
 			sourceType = servers.SourceBlank
 			destinationType = servers.DestinationLocal
-			localDiskSizeGiB = blockDeviceSpec.SizeGiB
+			localDiskSizeGiB = int(blockDeviceSpec.SizeGiB)
 		default:
 			return nil, fmt.Errorf("invalid block device type %s", blockDeviceSpec.Storage.Type)
 		}
@@ -425,14 +426,12 @@ func (s *Service) getImageIDByReference(ctx context.Context, k8sClient client.Cl
 	return nil, nil
 }
 
-// Helper to resolve a flavor ID.
-// TODO: needs a breaking CRD change so it works like images.
-func (s *Service) GetFlavorID(flavorID, flavorName *string) (string, error) {
-	if flavorID != nil {
-		return *flavorID, nil
+func (s *Service) GetFlavorID(flavorParam infrav1.FlavorParam) (string, error) {
+	if flavorParam.ID != nil {
+		return *flavorParam.ID, nil
 	}
 
-	if flavorName == nil {
+	if flavorParam.Filter == nil || flavorParam.Filter.Name == nil {
 		return "", fmt.Errorf("no flavors were found: no name set")
 	}
 
@@ -442,12 +441,20 @@ func (s *Service) GetFlavorID(flavorID, flavorName *string) (string, error) {
 	}
 
 	for _, flavor := range allFlavors {
-		if flavor.Name == *flavorName {
+		if flavor.Name == *flavorParam.Filter.Name {
 			return flavor.ID, nil
 		}
 	}
 
-	return "", fmt.Errorf("no flavors were found: name=%v", *flavorName)
+	return "", fmt.Errorf("no flavors were found: name=%v", *flavorParam.Filter.Name)
+}
+
+func (s *Service) GetFlavor(flavorID string) (*flavors.Flavor, error) {
+	return s.getComputeClient().GetFlavor(flavorID)
+}
+
+func (s *Service) GetImageDetails(imageID string) (*images.Image, error) {
+	return s.getImageClient().GetImage(imageID)
 }
 
 // GetManagementPort returns the port which is used for management and external
@@ -491,10 +498,15 @@ func (s *Service) DeleteInstance(eventObject runtime.Object, instanceStatus *Ins
 		if err != nil {
 			return false, err
 		}
-		if i != nil {
-			return false, nil
+		// Server not found means it has been permanently deleted
+		if i == nil {
+			return true, nil
 		}
-		return true, nil
+		// Server in SOFT_DELETED or DELETED state means deletion succeeded. This respects OpenStack's soft delete policy.
+		if i.State() == infrav1.InstanceStateSoftDeleted || i.State() == infrav1.InstanceStateDeleted {
+			return true, nil
+		}
+		return false, nil
 	})
 	if err != nil {
 		record.Warnf(eventObject, "FailedDeleteServer", "Failed to delete server %s with id %s: %v", instance.Name, instance.ID, err)
@@ -606,14 +618,14 @@ func (s *Service) GetInstanceStatusByName(eventObject runtime.Object, name strin
 	return nil, nil
 }
 
-func getTimeout(name string, timeout int) time.Duration {
+func getTimeout(name string, timeout int, unit time.Duration) time.Duration {
 	if v := os.Getenv(name); v != "" {
 		timeout, err := strconv.Atoi(v)
 		if err == nil {
-			return time.Duration(timeout)
+			return time.Duration(timeout) * unit
 		}
 	}
-	return time.Duration(timeout)
+	return time.Duration(timeout) * unit
 }
 
 // requiresTagging checks if the instanceSpec requires tagging,

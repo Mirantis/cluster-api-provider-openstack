@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2024 The Kubernetes Authors.
@@ -17,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package shared
+package e2eshared
 
 import (
 	"context"
