@@ -1,6 +1,13 @@
 # Kubernetes Cluster API Provider OpenStack
 
-[![Go Report Card](https://goreportcard.com/badge/kubernetes-sigs/cluster-api-provider-openstack)](https://goreportcard.com/report/kubernetes-sigs/cluster-api-provider-openstack)
+<p>
+<a href="https://godoc.org/sigs.k8s.io/cluster-api-provider-openstack"><img src="https://godoc.org/sigs.k8s.io/cluster-api-provider-openstack?status.svg"></a>
+<!-- join kubernetes slack channel for cluster-api -->
+<a href="http://slack.k8s.io/">
+<img src="https://img.shields.io/badge/join%20slack-%23cluster--api--provider--openstack-brightgreen"></a>
+<!-- latest stable release badge -->
+<img alt="GitHub release (latest SemVer)" src="https://img.shields.io/github/v/release/kubernetes-sigs/cluster-api-provider-openstack">
+</p>
 
 ------
 
@@ -39,10 +46,14 @@ previous cluster managers such as [kops][kops] and
 
 This provider's versions are compatible with the following versions of Cluster API:
 
-|                                    | v1beta1 (v1.x) |
-|------------------------------------| -------------- |
-| OpenStack Provider v1alpha7 (v0.9) | ✓              |
-| OpenStack Provider v1beta1         | ✓              |
+| Minor release | CAPI version |
+|---------------|--------------|
+| v0.14         | >=v1.12      |
+| v0.13         | >=v1.11      |
+| v0.12         | >=v1.9       |
+
+This is based on the version of Cluster API that the provider was built and tested against.
+Older versions may work if the APIs have not changed.
 
 Each version of Cluster API for OpenStack will attempt to support two Kubernetes versions.
 
@@ -94,7 +105,7 @@ involved:
 - via the [cluster-api-openstack channel on Kubernetes Slack][slack]
 - via the [SIG-Cluster-Lifecycle Mailing List](https://groups.google.com/forum/#!forum/kubernetes-sig-cluster-lifecycle).
 - during our Office Hours
-  - bi-weekly on Wednesdays @ 14:00 UTC on Zoom (link in meeting notes)
+  - bi-weekly on Wednesdays @ 12:00 UTC on Zoom (link in meeting notes)
   - Previous meetings:
     - [notes this year][office-hours-notes]
     - [notes in 2023][office-hours-notes-2023]

@@ -26,11 +26,12 @@ import (
 
 	"github.com/go-logr/logr/testr"
 	"github.com/google/go-cmp/cmp"
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/keypairs"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/v2/openstack/image/v2/images"
-	. "github.com/onsi/gomega" //nolint:revive
+	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,7 +40,7 @@ import (
 
 	orcv1alpha1 "github.com/k-orc/openstack-resource-controller/v2/api/v1alpha1"
 
-	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta2"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/clients"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/clients/mock"
 	"sigs.k8s.io/cluster-api-provider-openstack/pkg/scope"
@@ -939,7 +940,7 @@ func TestService_ReconcileInstance(t *testing.T) {
 						Name: "custom_hint",
 						Value: infrav1.SchedulerHintAdditionalValue{
 							Type:   infrav1.SchedulerHintTypeNumber,
-							Number: ptr.To(1),
+							Number: ptr.To[int32](1),
 						},
 					},
 				}
@@ -950,7 +951,7 @@ func TestService_ReconcileInstance(t *testing.T) {
 				schedulerHintOpts := servers.SchedulerHintOpts{
 					Group: serverGroupUUID,
 					AdditionalProperties: map[string]any{
-						"custom_hint": 1,
+						"custom_hint": int32(1),
 					},
 				}
 				expectCreateServer(g, r.compute, withSSHKey(createOpts), schedulerHintOpts, factory.ComputeClient, false)
@@ -1016,6 +1017,104 @@ func TestService_ReconcileInstance(t *testing.T) {
 			_, err = s.createInstanceImpl(&infrav1.OpenStackMachine{}, tt.getInstanceSpec(), time.Nanosecond, portUUIDs)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Service.CreateInstance() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+		})
+	}
+}
+
+func TestService_DeleteInstance(t *testing.T) {
+	const (
+		serverID   = "ce96e584-7ebc-46d6-9e55-987d72e3806c"
+		serverName = "test-server"
+	)
+
+	tests := []struct {
+		name    string
+		expect  func(m *mock.MockComputeClientMockRecorder)
+		wantErr bool
+	}{
+		{
+			name: "Server not found after delete",
+			expect: func(m *mock.MockComputeClientMockRecorder) {
+				m.DeleteServer(serverID).Return(nil)
+				m.GetServer(serverID).Return(nil, &gophercloud.ErrResourceNotFound{})
+			},
+			wantErr: false,
+		},
+		{
+			name: "Server in SOFT_DELETED state",
+			expect: func(m *mock.MockComputeClientMockRecorder) {
+				m.DeleteServer(serverID).Return(nil)
+				m.GetServer(serverID).Return(&servers.Server{
+					ID:     serverID,
+					Name:   serverName,
+					Status: "SOFT_DELETED",
+				}, nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "Server in DELETED state",
+			expect: func(m *mock.MockComputeClientMockRecorder) {
+				m.DeleteServer(serverID).Return(nil)
+				m.GetServer(serverID).Return(&servers.Server{
+					ID:     serverID,
+					Name:   serverName,
+					Status: "DELETED",
+				}, nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "Delete API returns not found",
+			expect: func(m *mock.MockComputeClientMockRecorder) {
+				m.DeleteServer(serverID).Return(&gophercloud.ErrResourceNotFound{})
+			},
+			wantErr: false,
+		},
+		{
+			name: "Delete API returns error",
+			expect: func(m *mock.MockComputeClientMockRecorder) {
+				m.DeleteServer(serverID).Return(errors.New("API error"))
+			},
+			wantErr: true,
+		},
+		{
+			name: "GetServer returns error",
+			expect: func(m *mock.MockComputeClientMockRecorder) {
+				m.DeleteServer(serverID).Return(nil)
+				m.GetServer(serverID).Return(nil, errors.New("API error"))
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockCtrl := gomock.NewController(t)
+			log := testr.New(t)
+			mockScopeFactory := scope.NewMockScopeFactory(mockCtrl, "")
+
+			tt.expect(mockScopeFactory.ComputeClient.EXPECT())
+
+			s, err := NewService(scope.NewWithLogger(mockScopeFactory, log))
+			if err != nil {
+				t.Fatalf("Failed to create service: %v", err)
+			}
+
+			instanceStatus := &InstanceStatus{
+				server: &servers.Server{
+					ID:   serverID,
+					Name: serverName,
+				},
+				logger: log,
+			}
+
+			eventObject := &infrav1.OpenStackMachine{}
+			err = s.DeleteInstance(eventObject, instanceStatus)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Service.DeleteInstance() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 		})

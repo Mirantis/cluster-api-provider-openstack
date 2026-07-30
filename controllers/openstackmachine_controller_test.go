@@ -17,19 +17,36 @@ limitations under the License.
 package controllers
 
 import (
+	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/go-logr/logr"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/test/framework"
+	conditions "sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/patch"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	infrav1alpha1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1alpha1"
-	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta2"
+	"sigs.k8s.io/cluster-api-provider-openstack/pkg/scope"
 )
 
 const (
 	networkUUID                   = "d412171b-9fd7-41c1-95a6-c24e5953974d"
 	subnetUUID                    = "d2d8d98d-b234-477e-a547-868b7cb5d6a5"
+	secondSubnetUUID              = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	primarySubnetUUID             = "f9e8d7c6-b5a4-3210-fedc-ba9876543210"
 	extraSecurityGroupUUID        = "514bb2d8-3390-4a3b-86a7-7864ba57b329"
 	controlPlaneSecurityGroupUUID = "c9817a91-4821-42db-8367-2301002ab659"
 	workerSecurityGroupUUID       = "9c6c0d28-03c9-436c-815d-58440ac2c1c8"
@@ -42,6 +59,7 @@ const (
 	flavorName           = "test-flavor"
 	sshKeyName           = "test-ssh-key"
 	failureDomain        = "test-failure-domain"
+	testInstanceID       = "test-instance-id-12345"
 )
 
 func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
@@ -165,6 +183,74 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			},
 		},
 	}
+	openStackClusterWithMultipleSubnets := &infrav1.OpenStackCluster{
+		Spec: infrav1.OpenStackClusterSpec{
+			ManagedSecurityGroups: &infrav1.ManagedSecurityGroups{},
+			Subnets: []infrav1.SubnetParam{
+				{ID: ptr.To(subnetUUID)},
+				{ID: ptr.To(secondSubnetUUID)},
+			},
+		},
+		Status: infrav1.OpenStackClusterStatus{
+			WorkerSecurityGroup: &infrav1.SecurityGroupStatus{
+				ID: workerSecurityGroupUUID,
+			},
+			Network: &infrav1.NetworkStatusWithSubnets{
+				NetworkStatus: infrav1.NetworkStatus{
+					ID: networkUUID,
+				},
+			},
+		},
+	}
+	openStackClusterWithPrimarySubnet := &infrav1.OpenStackCluster{
+		Spec: infrav1.OpenStackClusterSpec{
+			ManagedSecurityGroups: &infrav1.ManagedSecurityGroups{},
+			Subnets: []infrav1.SubnetParam{
+				{ID: ptr.To(subnetUUID)},
+				{ID: ptr.To(secondSubnetUUID)},
+			},
+			PrimarySubnet: &infrav1.SubnetParam{
+				ID: ptr.To(primarySubnetUUID),
+			},
+		},
+		Status: infrav1.OpenStackClusterStatus{
+			WorkerSecurityGroup: &infrav1.SecurityGroupStatus{
+				ID: workerSecurityGroupUUID,
+			},
+			Network: &infrav1.NetworkStatusWithSubnets{
+				NetworkStatus: infrav1.NetworkStatus{
+					ID: networkUUID,
+				},
+			},
+		},
+	}
+	portOptsWithMultipleSubnets := []infrav1.PortOpts{
+		{
+			Network: &infrav1.NetworkParam{
+				ID: ptr.To(networkUUID),
+			},
+			SecurityGroups: []infrav1.SecurityGroupParam{
+				{ID: ptr.To(workerSecurityGroupUUID)},
+			},
+			FixedIPs: []infrav1.FixedIP{
+				{Subnet: &infrav1.SubnetParam{ID: ptr.To(subnetUUID)}},
+				{Subnet: &infrav1.SubnetParam{ID: ptr.To(secondSubnetUUID)}},
+			},
+		},
+	}
+	portOptsWithPrimarySubnet := []infrav1.PortOpts{
+		{
+			Network: &infrav1.NetworkParam{
+				ID: ptr.To(networkUUID),
+			},
+			SecurityGroups: []infrav1.SecurityGroupParam{
+				{ID: ptr.To(workerSecurityGroupUUID)},
+			},
+			FixedIPs: []infrav1.FixedIP{
+				{Subnet: &infrav1.SubnetParam{ID: ptr.To(primarySubnetUUID)}},
+			},
+		},
+	}
 	image := infrav1.ImageParam{Filter: &infrav1.ImageFilter{Name: ptr.To("my-image")}}
 	tags := []string{"tag1", "tag2"}
 	userData := &corev1.LocalObjectReference{Name: "server-data-secret"}
@@ -179,7 +265,11 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			name:    "Test a minimum OpenStackMachineSpec to OpenStackServerSpec conversion",
 			cluster: openStackCluster,
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor:     ptr.To(flavorName),
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
 				Image:      image,
 				SSHKeyName: sshKeyName,
 			},
@@ -197,7 +287,11 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			name:    "Test an OpenStackMachineSpec to OpenStackServerSpec conversion with an additional security group",
 			cluster: openStackCluster,
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor:     ptr.To(flavorName),
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
 				Image:      image,
 				SSHKeyName: sshKeyName,
 				SecurityGroups: []infrav1.SecurityGroupParam{
@@ -220,7 +314,11 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			name:    "Test a OpenStackMachineSpec to OpenStackServerSpec conversion with a specified subnet",
 			cluster: openStackClusterWithSubnet,
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor:     ptr.To(flavorName),
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
 				Image:      image,
 				SSHKeyName: sshKeyName,
 			},
@@ -238,8 +336,12 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			name:    "Test an OpenStackMachineSpec to OpenStackServerSpec conversion with flavor and flavorID specified",
 			cluster: openStackCluster,
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor:     ptr.To(flavorName),
-				FlavorID:   ptr.To(flavorUUID),
+				Flavor: infrav1.FlavorParam{
+					ID: ptr.To(flavorUUID),
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
 				Image:      image,
 				SSHKeyName: sshKeyName,
 			},
@@ -258,7 +360,9 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			name:    "Test an OpenStackMachineSpec to OpenStackServerSpec conversion with flavorID specified but not flavor",
 			cluster: openStackCluster,
 			spec: &infrav1.OpenStackMachineSpec{
-				FlavorID:   ptr.To(flavorUUID),
+				Flavor: infrav1.FlavorParam{
+					ID: ptr.To(flavorUUID),
+				},
 				Image:      image,
 				SSHKeyName: sshKeyName,
 			},
@@ -313,9 +417,57 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 			},
 		},
 		{
+			name:    "multiple subnets without primarySubnet: port gets all subnets as FixedIPs",
+			cluster: openStackClusterWithMultipleSubnets,
+			spec: &infrav1.OpenStackMachineSpec{
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
+				Image:      image,
+				SSHKeyName: sshKeyName,
+			},
+			want: &infrav1alpha1.OpenStackServerSpec{
+				Flavor:      ptr.To(flavorName),
+				IdentityRef: identityRef,
+				Image:       image,
+				SSHKeyName:  sshKeyName,
+				Ports:       portOptsWithMultipleSubnets,
+				Tags:        tags,
+				UserDataRef: userData,
+			},
+		},
+		{
+			name:    "primarySubnet set: port FixedIPs restricted to primarySubnet only",
+			cluster: openStackClusterWithPrimarySubnet,
+			spec: &infrav1.OpenStackMachineSpec{
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
+				Image:      image,
+				SSHKeyName: sshKeyName,
+			},
+			want: &infrav1alpha1.OpenStackServerSpec{
+				Flavor:      ptr.To(flavorName),
+				IdentityRef: identityRef,
+				Image:       image,
+				SSHKeyName:  sshKeyName,
+				Ports:       portOptsWithPrimarySubnet,
+				Tags:        tags,
+				UserDataRef: userData,
+			},
+		},
+		{
 			name: "Error case: no cluster network and no machine ports",
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor:     ptr.To(flavorName),
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
 				Image:      image,
 				SSHKeyName: sshKeyName,
 				// No ports defined
@@ -327,8 +479,12 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 		{
 			name: "Empty cluster network ID, machine defines explicit ports",
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor: ptr.To(flavorName),
-				Image:  image,
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
+				Image: image,
 				Ports: []infrav1.PortOpts{{
 					Network: &infrav1.NetworkParam{ID: ptr.To(networkUUID)},
 				}},
@@ -349,12 +505,16 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 		{
 			name: "Explicit port with disablePortSecurity",
 			spec: &infrav1.OpenStackMachineSpec{
-				Flavor: ptr.To(flavorName),
-				Image:  image,
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
+				Image: image,
 				Ports: []infrav1.PortOpts{{
 					Network: &infrav1.NetworkParam{ID: ptr.To(networkUUID)},
 					ResolvedPortSpecFields: infrav1.ResolvedPortSpecFields{
-						DisablePortSecurity: ptr.To(true),
+						EnablePortSecurity: ptr.To(false),
 					},
 				}},
 			},
@@ -367,7 +527,7 @@ func TestOpenStackMachineSpecToOpenStackServerSpec(t *testing.T) {
 					Network:        &infrav1.NetworkParam{ID: ptr.To(networkUUID)},
 					SecurityGroups: nil,
 					ResolvedPortSpecFields: infrav1.ResolvedPortSpecFields{
-						DisablePortSecurity: ptr.To(true),
+						EnablePortSecurity: ptr.To(false),
 					},
 				}},
 				Tags:        tags,
@@ -428,3 +588,536 @@ func TestGetPortIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileMachineState(t *testing.T) { //nolint:gocyclo,cyclop // this is test code
+	tests := []struct {
+		name                            string
+		instanceState                   *infrav1.InstanceState
+		serverConditions                []metav1.Condition
+		expectRequeue                   bool
+		expectedInstanceReadyCondition  *metav1.Condition
+		expectedReadyCondition          *metav1.Condition
+		expectInitializationProvisioned bool
+	}{
+		{
+			name:          "Nil InstanceState with DependencyFailed condition propagates error to machine",
+			instanceState: nil,
+			serverConditions: []metav1.Condition{
+				{
+					Type:    infrav1.InstanceReadyCondition,
+					Status:  metav1.ConditionFalse,
+					Reason:  infrav1.DependencyFailedReason,
+					Message: "Failed to resolve server spec: image not found",
+				},
+			},
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:    infrav1.InstanceReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.DependencyFailedReason,
+				Message: "Failed to resolve server spec: image not found",
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:    clusterv1.ReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.DependencyFailedReason,
+				Message: "Failed to resolve server spec: image not found",
+			},
+		},
+		{
+			name:          "Nil InstanceState with InstanceNotReady condition propagates info to machine",
+			instanceState: nil,
+			serverConditions: []metav1.Condition{
+				{
+					Type:    infrav1.InstanceReadyCondition,
+					Status:  metav1.ConditionFalse,
+					Reason:  infrav1.InstanceNotReadyReason,
+					Message: "Waiting for dependencies",
+				},
+			},
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:    infrav1.InstanceReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.InstanceNotReadyReason,
+				Message: "Waiting for dependencies",
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:    clusterv1.ReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.InstanceNotReadyReason,
+				Message: "Waiting for dependencies",
+			},
+		},
+		{
+			name:          "Nil InstanceState with no server condition sets default waiting conditions",
+			instanceState: nil,
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:    infrav1.InstanceReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.InstanceNotReadyReason,
+				Message: "Waiting for instance to be created",
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:    clusterv1.ReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.InstanceNotReadyReason,
+				Message: "Waiting for instance to be created",
+			},
+		},
+		{
+			name:          "Instance state ACTIVE sets conditions to True and initialization.provisioned",
+			instanceState: ptr.To(infrav1.InstanceStateActive),
+			expectRequeue: false,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:   infrav1.InstanceReadyCondition,
+				Status: metav1.ConditionTrue,
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:   clusterv1.ReadyCondition,
+				Status: metav1.ConditionTrue,
+			},
+			expectInitializationProvisioned: true,
+		},
+		{
+			name:          "Instance state ERROR sets conditions to False",
+			instanceState: ptr.To(infrav1.InstanceStateError),
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:   infrav1.InstanceReadyCondition,
+				Status: metav1.ConditionFalse,
+				Reason: infrav1.InstanceStateErrorReason,
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:   clusterv1.ReadyCondition,
+				Status: metav1.ConditionFalse,
+				Reason: infrav1.InstanceStateErrorReason,
+			},
+		},
+		{
+			name:          "Instance state ERROR propagates error message from server condition",
+			instanceState: ptr.To(infrav1.InstanceStateError),
+			serverConditions: []metav1.Condition{
+				{
+					Type:    infrav1.InstanceReadyCondition,
+					Status:  metav1.ConditionFalse,
+					Reason:  infrav1.InstanceStateErrorReason,
+					Message: "Server entered ERROR state: No valid host was found",
+				},
+			},
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:    infrav1.InstanceReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.InstanceStateErrorReason,
+				Message: "Server entered ERROR state: No valid host was found",
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:    clusterv1.ReadyCondition,
+				Status:  metav1.ConditionFalse,
+				Reason:  infrav1.InstanceStateErrorReason,
+				Message: "Server entered ERROR state: No valid host was found",
+			},
+		},
+		{
+			name:          "Instance state DELETED sets conditions to False",
+			instanceState: ptr.To(infrav1.InstanceStateDeleted),
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:   infrav1.InstanceReadyCondition,
+				Status: metav1.ConditionFalse,
+				Reason: infrav1.InstanceDeletedReason,
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:   clusterv1.ReadyCondition,
+				Status: metav1.ConditionFalse,
+				Reason: infrav1.InstanceDeletedReason,
+			},
+		},
+		{
+			name:          "Instance state BUILD sets ReadyCondition to False",
+			instanceState: ptr.To(infrav1.InstanceStateBuild),
+			expectRequeue: true,
+			expectedReadyCondition: &metav1.Condition{
+				Type:   clusterv1.ReadyCondition,
+				Status: metav1.ConditionFalse,
+				Reason: infrav1.InstanceNotReadyReason,
+			},
+		},
+		{
+			name:          "Instance state SHUTOFF sets conditions to Unknown",
+			instanceState: ptr.To(infrav1.InstanceStateShutoff),
+			expectRequeue: true,
+			expectedInstanceReadyCondition: &metav1.Condition{
+				Type:   infrav1.InstanceReadyCondition,
+				Status: metav1.ConditionUnknown,
+				Reason: infrav1.InstanceNotReadyReason,
+			},
+			expectedReadyCondition: &metav1.Condition{
+				Type:   clusterv1.ReadyCondition,
+				Status: metav1.ConditionUnknown,
+				Reason: infrav1.InstanceNotReadyReason,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openStackMachine := &infrav1.OpenStackMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      openStackMachineName,
+					Namespace: namespace,
+				},
+				Spec: infrav1.OpenStackMachineSpec{
+					Flavor: infrav1.FlavorParam{
+						Filter: &infrav1.FlavorFilter{
+							Name: ptr.To(flavorName),
+						},
+					},
+					Image: infrav1.ImageParam{
+						Filter: &infrav1.ImageFilter{
+							Name: ptr.To("test-image"),
+						},
+					},
+				},
+			}
+
+			machine := &clusterv1.Machine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-machine",
+					Namespace: namespace,
+				},
+			}
+			openStackServer := &infrav1alpha1.OpenStackServer{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      openStackMachineName,
+					Namespace: namespace,
+				},
+				Status: infrav1alpha1.OpenStackServerStatus{
+					InstanceID:    ptr.To(testInstanceID),
+					InstanceState: tt.instanceState,
+				},
+			}
+
+			// Set any pre-existing conditions on the OpenStackServer
+			openStackServer.Status.Conditions = tt.serverConditions
+
+			r := &OpenStackMachineReconciler{}
+			result := r.reconcileMachineState(scope.NewWithLogger(nil, logr.Discard()), openStackMachine, machine, openStackServer)
+
+			// Check requeue
+			if tt.expectRequeue && result == nil {
+				t.Errorf("expected requeue result, got nil")
+			}
+			if !tt.expectRequeue && result != nil {
+				t.Errorf("expected no requeue, got %v", result)
+			}
+
+			// Check InstanceReadyCondition
+			if tt.expectedInstanceReadyCondition != nil {
+				condition := conditions.Get(openStackMachine, tt.expectedInstanceReadyCondition.Type)
+				if condition == nil {
+					t.Errorf("expected %s condition to be set", tt.expectedInstanceReadyCondition.Type)
+				} else {
+					if condition.Status != tt.expectedInstanceReadyCondition.Status {
+						t.Errorf("expected %s status %s, got %s", tt.expectedInstanceReadyCondition.Type, tt.expectedInstanceReadyCondition.Status, condition.Status)
+					}
+					if tt.expectedInstanceReadyCondition.Reason != "" && condition.Reason != tt.expectedInstanceReadyCondition.Reason {
+						t.Errorf("expected %s reason %s, got %s", tt.expectedInstanceReadyCondition.Type, tt.expectedInstanceReadyCondition.Reason, condition.Reason)
+					}
+					if tt.expectedInstanceReadyCondition.Message != "" && condition.Message != tt.expectedInstanceReadyCondition.Message {
+						t.Errorf("expected %s message %q, got %q", tt.expectedInstanceReadyCondition.Type, tt.expectedInstanceReadyCondition.Message, condition.Message)
+					}
+				}
+			}
+
+			// Check ReadyCondition
+			if tt.expectedReadyCondition != nil {
+				condition := conditions.Get(openStackMachine, tt.expectedReadyCondition.Type)
+				if condition == nil {
+					t.Errorf("expected %s condition to be set", tt.expectedReadyCondition.Type)
+				} else {
+					if condition.Status != tt.expectedReadyCondition.Status {
+						t.Errorf("expected %s status %s, got %s", tt.expectedReadyCondition.Type, tt.expectedReadyCondition.Status, condition.Status)
+					}
+					if tt.expectedReadyCondition.Reason != "" && condition.Reason != tt.expectedReadyCondition.Reason {
+						t.Errorf("expected %s reason %s, got %s", tt.expectedReadyCondition.Type, tt.expectedReadyCondition.Reason, condition.Reason)
+					}
+					if tt.expectedReadyCondition.Message != "" && condition.Message != tt.expectedReadyCondition.Message {
+						t.Errorf("expected %s message %q, got %q", tt.expectedReadyCondition.Type, tt.expectedReadyCondition.Message, condition.Message)
+					}
+				}
+			}
+
+			// Check initialization.provisioned
+			if tt.expectInitializationProvisioned {
+				if openStackMachine.Status.Initialization == nil || !openStackMachine.Status.Initialization.Provisioned {
+					t.Errorf("expected Initialization.Provisioned to be true")
+				}
+			}
+
+			// Note: v1beta2 doesn't have FailureReason/FailureMessage fields
+			// Failures are now communicated via conditions only
+			// So we skip the failure field checks for v1beta2
+		})
+	}
+}
+
+var _ = Describe("OpenStackMachine controller", func() {
+	var (
+		testMachine        *infrav1.OpenStackMachine
+		capiMachine        *clusterv1.Machine
+		capiCluster        *clusterv1.Cluster
+		testCluster        *infrav1.OpenStackCluster
+		testNamespace      string
+		machineReconciler  *OpenStackMachineReconciler
+		machineMockCtrl    *gomock.Controller
+		machineMockFactory *scope.MockScopeFactory
+		testNum            int
+	)
+
+	testClusterName := "test-cluster"
+	testMachineName := "test-machine"
+	capiMachineName := "capi-machine"
+
+	BeforeEach(func() {
+		ctx = context.TODO()
+		testNum++
+		testNamespace = fmt.Sprintf("machine-test-%d", testNum)
+
+		testCluster = &infrav1.OpenStackCluster{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: infrav1.SchemeGroupVersion.Group + "/" + infrav1.SchemeGroupVersion.Version,
+				Kind:       "OpenStackCluster",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testClusterName,
+				Namespace: testNamespace,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: clusterv1.GroupVersion.Group + "/" + clusterv1.GroupVersion.Version,
+						Kind:       "Cluster",
+						Name:       capiClusterName,
+						UID:        types.UID("cluster-uid"),
+					},
+				},
+			},
+			Spec: infrav1.OpenStackClusterSpec{
+				IdentityRef: infrav1.OpenStackIdentityReference{
+					Name:      "test-creds",
+					CloudName: "openstack",
+				},
+			},
+			Status: infrav1.OpenStackClusterStatus{},
+		}
+
+		capiCluster = &clusterv1.Cluster{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: clusterv1.GroupVersion.Group + "/" + clusterv1.GroupVersion.Version,
+				Kind:       "Cluster",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      capiClusterName,
+				Namespace: testNamespace,
+			},
+			Spec: clusterv1.ClusterSpec{
+				InfrastructureRef: clusterv1.ContractVersionedObjectReference{
+					APIGroup: infrav1.GroupName,
+					Kind:     "OpenStackCluster",
+					Name:     testClusterName,
+				},
+			},
+		}
+
+		capiMachine = &clusterv1.Machine{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: clusterv1.GroupVersion.Group + "/" + clusterv1.GroupVersion.Version,
+				Kind:       "Machine",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      capiMachineName,
+				Namespace: testNamespace,
+				Labels: map[string]string{
+					clusterv1.ClusterNameLabel: capiClusterName,
+				},
+			},
+		}
+
+		testMachine = &infrav1.OpenStackMachine{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: infrav1.SchemeGroupVersion.Group + "/" + infrav1.SchemeGroupVersion.Version,
+				Kind:       "OpenStackMachine",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testMachineName,
+				Namespace: testNamespace,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: clusterv1.GroupVersion.Group + "/" + clusterv1.GroupVersion.Version,
+						Kind:       "Machine",
+						Name:       capiMachineName,
+						UID:        types.UID("machine-uid"),
+					},
+				},
+			},
+			Spec: infrav1.OpenStackMachineSpec{
+				Flavor: infrav1.FlavorParam{
+					Filter: &infrav1.FlavorFilter{
+						Name: ptr.To(flavorName),
+					},
+				},
+				Image: infrav1.ImageParam{
+					Filter: &infrav1.ImageFilter{
+						Name: ptr.To("test-image"),
+					},
+				},
+			},
+		}
+
+		input := framework.CreateNamespaceInput{
+			Creator: k8sClient,
+			Name:    testNamespace,
+		}
+		framework.CreateNamespace(ctx, input)
+
+		machineMockCtrl = gomock.NewController(GinkgoT())
+		machineMockFactory = scope.NewMockScopeFactory(machineMockCtrl, "")
+		machineReconciler = &OpenStackMachineReconciler{
+			Client:       k8sClient,
+			ScopeFactory: machineMockFactory,
+		}
+	})
+
+	AfterEach(func() {
+		orphan := metav1.DeletePropagationOrphan
+		deleteOptions := client.DeleteOptions{
+			PropagationPolicy: &orphan,
+		}
+
+		// Remove finalizers and delete openstackmachine
+		patchHelper, err := patch.NewHelper(testMachine, k8sClient)
+		Expect(err).To(BeNil())
+		testMachine.SetFinalizers([]string{})
+		err = patchHelper.Patch(ctx, testMachine)
+		Expect(err).To(BeNil())
+		err = k8sClient.Delete(ctx, testMachine, &deleteOptions)
+		Expect(err).To(BeNil())
+
+		// Remove finalizers and delete openstackcluster
+		patchHelper, err = patch.NewHelper(testCluster, k8sClient)
+		Expect(err).To(BeNil())
+		testCluster.SetFinalizers([]string{})
+		err = patchHelper.Patch(ctx, testCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Delete(ctx, testCluster, &deleteOptions)
+		Expect(err).To(BeNil())
+
+		// Remove finalizers and delete cluster
+		patchHelper, err = patch.NewHelper(capiCluster, k8sClient)
+		Expect(err).To(BeNil())
+		capiCluster.SetFinalizers([]string{})
+		err = patchHelper.Patch(ctx, capiCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Delete(ctx, capiCluster, &deleteOptions)
+		Expect(err).To(BeNil())
+
+		// Remove finalizers and delete machine
+		patchHelper, err = patch.NewHelper(capiMachine, k8sClient)
+		Expect(err).To(BeNil())
+		capiMachine.SetFinalizers([]string{})
+		err = patchHelper.Patch(ctx, capiMachine)
+		Expect(err).To(BeNil())
+		err = k8sClient.Delete(ctx, capiMachine, &deleteOptions)
+		Expect(err).To(BeNil())
+	})
+
+	It("should set OpenStackAuthenticationSucceededCondition to False when credentials secret is missing", func() {
+		testMachine.SetName("missing-machine-credentials")
+		testMachine.Spec.IdentityRef = &infrav1.OpenStackIdentityReference{
+			Type:      "Secret",
+			Name:      "non-existent-secret",
+			CloudName: "openstack",
+		}
+
+		err := k8sClient.Create(ctx, capiCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, testCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, capiMachine)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, testMachine)
+		Expect(err).To(BeNil())
+
+		credentialsErr := fmt.Errorf("secret not found: non-existent-secret")
+		machineMockFactory.SetClientScopeCreateError(credentialsErr)
+
+		req := reconcile.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      testMachine.Name,
+				Namespace: testMachine.Namespace,
+			},
+		}
+		result, err := machineReconciler.Reconcile(ctx, req)
+
+		Expect(err).To(MatchError(credentialsErr))
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		// Fetch the updated OpenStackMachine to verify the condition was set
+		updatedMachine := &infrav1.OpenStackMachine{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: testMachine.Name, Namespace: testMachine.Namespace}, updatedMachine)).To(Succeed())
+
+		// Verify OpenStackAuthenticationSucceededCondition is set to False
+		Expect(conditions.IsFalse(updatedMachine, infrav1.OpenStackAuthenticationSucceeded)).To(BeTrue())
+		condition := conditions.Get(updatedMachine, infrav1.OpenStackAuthenticationSucceeded)
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.Reason).To(Equal(infrav1.OpenStackAuthenticationFailedReason))
+		Expect(condition.Message).To(ContainSubstring("Failed to create OpenStack client scope"))
+	})
+
+	It("should set OpenStackAuthenticationSucceededCondition to False when namespace is denied access to ClusterIdentity", func() {
+		testMachine.SetName("identity-access-denied-machine")
+		testMachine.Spec.IdentityRef = &infrav1.OpenStackIdentityReference{
+			Type:      "ClusterIdentity",
+			Name:      "test-cluster-identity",
+			CloudName: "openstack",
+		}
+
+		err := k8sClient.Create(ctx, capiCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, testCluster)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, capiMachine)
+		Expect(err).To(BeNil())
+		err = k8sClient.Create(ctx, testMachine)
+		Expect(err).To(BeNil())
+
+		identityAccessErr := &scope.IdentityAccessDeniedError{
+			IdentityName:       "test-cluster-identity",
+			RequesterNamespace: testNamespace,
+		}
+		machineMockFactory.SetClientScopeCreateError(identityAccessErr)
+
+		req := reconcile.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      testMachine.Name,
+				Namespace: testMachine.Namespace,
+			},
+		}
+		result, err := machineReconciler.Reconcile(ctx, req)
+
+		Expect(err).To(MatchError(identityAccessErr))
+		Expect(result).To(Equal(reconcile.Result{}))
+
+		// Fetch the updated OpenStackMachine to verify the condition was set
+		updatedMachine := &infrav1.OpenStackMachine{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: testMachine.Name, Namespace: testMachine.Namespace}, updatedMachine)).To(Succeed())
+
+		// Verify OpenStackAuthenticationSucceededCondition is set to False
+		Expect(conditions.IsFalse(updatedMachine, infrav1.OpenStackAuthenticationSucceeded)).To(BeTrue())
+		condition := conditions.Get(updatedMachine, infrav1.OpenStackAuthenticationSucceeded)
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.Reason).To(Equal(infrav1.OpenStackAuthenticationFailedReason))
+		Expect(condition.Message).To(ContainSubstring("Failed to create OpenStack client scope"))
+	})
+})

@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2021 The Kubernetes Authors.
@@ -17,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package shared
+package e2eshared
 
 import (
 	"errors"
@@ -31,39 +30,43 @@ import (
 	orcv1alpha1 "github.com/k-orc/openstack-resource-controller/v2/api/v1alpha1"
 
 	infrav1alpha1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1alpha1"
-	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta1"
+	infrav1 "sigs.k8s.io/cluster-api-provider-openstack/api/v1beta2"
 )
 
 const (
-	DefaultSSHKeyPairName      = "cluster-api-provider-openstack-sigs-k8s-io"
-	KubeContext                = "KUBE_CONTEXT"
-	KubernetesVersion          = "KUBERNETES_VERSION"
-	CCMPath                    = "CCM"
-	CCMResources               = "CCM_RESOURCES"
-	OpenStackBastionFlavorAlt  = "OPENSTACK_BASTION_MACHINE_FLAVOR_ALT"
-	OpenStackCloudYAMLFile     = "OPENSTACK_CLOUD_YAML_FILE"
-	OpenStackCloud             = "OPENSTACK_CLOUD"
-	OpenStackCloudCACertB64    = "OPENSTACK_CLOUD_CACERT_B64"
-	OpenStackCloudAdmin        = "OPENSTACK_CLOUD_ADMIN"
-	OpenStackFailureDomain     = "OPENSTACK_FAILURE_DOMAIN" //nolint:gosec // Linter thinks this could be credentials...
-	OpenStackFailureDomainAlt  = "OPENSTACK_FAILURE_DOMAIN_ALT"
-	OpenStackVolumeTypeAlt     = "OPENSTACK_VOLUME_TYPE_ALT"
-	OpenStackImageName         = "OPENSTACK_IMAGE_NAME"
-	OpenStackNodeMachineFlavor = "OPENSTACK_NODE_MACHINE_FLAVOR"
-	SSHUserMachine             = "SSH_USER_MACHINE"
-	FlavorDefault              = ""
-	FlavorNoBastion            = "no-bastion"
-	FlavorWithoutLB            = "without-lb"
-	FlavorMultiNetwork         = "multi-network"
-	FlavorMultiAZ              = "multi-az"
-	FlavorMDRemediation        = "md-remediation"
-	FlavorKCPRemediation       = "kcp-remediation"
-	FlavorFlatcar              = "flatcar"
-	FlavorKubernetesUpgrade    = "k8s-upgrade"
-	FlavorFlatcarSysext        = "flatcar-sysext"
-	FlavorHealthMonitor        = "health-monitor"
-	FlavorCapiV1Beta1          = "capi-v1beta1"
-	FlavorClusterIdentity      = "cluster-identity"
+	DefaultSSHKeyPairName        = "cluster-api-provider-openstack-sigs-k8s-io"
+	KubeContext                  = "KUBE_CONTEXT"
+	KubernetesKindVersion        = "KUBERNETES_KIND_VERSION"
+	KubernetesVersion            = "KUBERNETES_VERSION"
+	KubernetesVersionUpgradeFrom = "KUBERNETES_VERSION_UPGRADE_FROM"
+	CCMPath                      = "CCM"
+	CCMResources                 = "CCM_RESOURCES"
+	OpenStackBastionFlavorAlt    = "OPENSTACK_BASTION_MACHINE_FLAVOR_ALT"
+	OpenStackCloudYAMLFile       = "OPENSTACK_CLOUD_YAML_FILE"
+	OpenStackCloud               = "OPENSTACK_CLOUD"
+	OpenStackCloudCACertB64      = "OPENSTACK_CLOUD_CACERT_B64"
+	OpenStackCloudAdmin          = "OPENSTACK_CLOUD_ADMIN"
+	OpenStackFailureDomain       = "OPENSTACK_FAILURE_DOMAIN" //nolint:gosec // Linter thinks this could be credentials...
+	OpenStackFailureDomainAlt    = "OPENSTACK_FAILURE_DOMAIN_ALT"
+	OpenStackVolumeTypeAlt       = "OPENSTACK_VOLUME_TYPE_ALT"
+	OpenStackImageName           = "OPENSTACK_IMAGE_NAME"
+	OpenStackNodeMachineFlavor   = "OPENSTACK_NODE_MACHINE_FLAVOR"
+	SSHUserMachine               = "SSH_USER_MACHINE"
+	FlavorDefault                = ""
+	FlavorTopology               = "topology"
+	FlavorNoBastion              = "no-bastion"
+	FlavorWithoutLB              = "without-lb"
+	FlavorMultiNetwork           = "multi-network"
+	FlavorMultiAZ                = "multi-az"
+	FlavorMDRemediation          = "md-remediation"
+	FlavorKCPRemediation         = "kcp-remediation"
+	FlavorFlatcar                = "flatcar"
+	FlavorKubernetesUpgrade      = "k8s-upgrade"
+	FlavorFlatcarSysext          = "flatcar-sysext"
+	FlavorHealthMonitor          = "health-monitor"
+	FlavorCapiV1Beta1            = "capi-v1beta1"
+	FlavorClusterIdentity        = "cluster-identity"
+	FlavorTopologyAutoscaler     = "topology-autoscaler"
 )
 
 // DefaultScheme returns the default scheme to use for testing.
